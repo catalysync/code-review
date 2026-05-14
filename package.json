@@ -28,7 +28,8 @@
     "commander": "^12.1.0",
     "gray-matter": "^4.0.3",
     "kleur": "^4.1.5",
-    "yaml": "^2.6.1"
+    "yaml": "^2.6.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

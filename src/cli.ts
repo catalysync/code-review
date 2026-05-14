@@ -156,9 +156,10 @@ function printReportSummary(result: Awaited<ReturnType<typeof runReview>>): void
 }
 
 function severityColor(s: string) {
-  if (s === 'block') return kleur.red().bold;
-  if (s === 'high') return kleur.red;
-  if (s === 'medium') return kleur.yellow;
+  if (s === 'security') return kleur.red().bold;
+  if (s === 'blocker') return kleur.red().bold;
+  if (s === 'warning') return kleur.yellow;
+  if (s === 'suggestion') return kleur.cyan;
   return kleur.gray;
 }
 

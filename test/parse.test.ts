@@ -17,18 +17,19 @@ describe('parseReview', () => {
   });
 
   it('coerces issue fields and defaults missing line_end', () => {
-    const text = `\`\`\`yaml\nreview:\n  summary: one issue\n  estimated_review_effort_1_to_5: 3\n  issues:\n    - file: src/a.py\n      line_start: 5\n      category: bug\n      severity: high\n      title: missing import\n      why: ImportError at runtime\n      suggestion: |\n        from x import y\n  security_concerns: 'No'\n  test_coverage_assessment: adequate\n\`\`\``;
+    const text = `\`\`\`yaml\nreview:\n  summary: one issue\n  estimated_review_effort_1_to_5: 3\n  issues:\n    - file: src/a.py\n      line_start: 5\n      category: bug\n      severity: blocker\n      title: missing import\n      why: ImportError at runtime\n      suggestion: |\n        from x import y\n  security_concerns: 'No'\n  test_coverage_assessment: adequate\n\`\`\``;
     const review = parseReview(text);
     expect(review.issues).toHaveLength(1);
     expect(review.issues[0].line_end).toBe(5);
+    expect(review.issues[0].severity).toBe('blocker');
     expect(review.issues[0].suggestion).toBe('from x import y');
   });
 
-  it('falls back to medium severity for unknown values', () => {
+  it('falls back to suggestion severity for unknown values', () => {
     const text = `\`\`\`yaml\nreview:\n  summary: ''\n  estimated_review_effort_1_to_5: 1\n  issues:\n    - file: a.ts\n      line_start: 1\n      category: vibes\n      severity: critical\n      title: x\n      why: y\n  security_concerns: 'No'\n  test_coverage_assessment: ok\n\`\`\``;
     const review = parseReview(text);
     expect(review.issues[0].category).toBe('maintainability');
-    expect(review.issues[0].severity).toBe('medium');
+    expect(review.issues[0].severity).toBe('suggestion');
   });
 
   it('throws when there is no review key', () => {

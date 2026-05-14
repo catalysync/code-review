@@ -1,4 +1,5 @@
-import type { Issue, Review } from './types.js';
+import { severityCounts } from './severity.js';
+import type { Issue, Review, Severity } from './types.js';
 
 export interface GhReviewComment {
   path: string;
@@ -28,10 +29,8 @@ export function shouldUseSuggestionBlock(issue: Issue): boolean {
   if (!issue.suggestion) return false;
   const trimmed = issue.suggestion.trim();
   if (trimmed.length === 0) return false;
-  // Prose suggestions usually start with "rewrite", "consider", "extract", etc.
   const proseMarkers = /^(rewrite|consider|refactor|extract|move|split|introduce|add a)\b/i;
   if (proseMarkers.test(trimmed)) return false;
-  // Multi-paragraph suggestions are prose.
   if (/\n\s*\n/.test(trimmed)) return false;
   return true;
 }
@@ -49,7 +48,7 @@ function renderIssueBody(issue: Issue): string {
 
 /**
  * Build the GitHub review payload from a parsed `Review`. The top-level body
- * is at most one short sentence; per-issue inline comments do the work.
+ * carries the walkthrough block (if any) plus a one-sentence severity headline.
  */
 export function renderReview(review: Review, opts: { commitId: string }): GhReviewPayload {
   const comments: GhReviewComment[] = review.issues.map((issue) => {
@@ -75,19 +74,45 @@ export function renderReview(review: Review, opts: { commitId: string }): GhRevi
   };
 }
 
-function renderTopBody(review: Review): string {
+/** Display order for severities in the headline — most serious first. */
+const SEVERITY_DISPLAY_ORDER: Severity[] = ['security', 'blocker', 'warning', 'suggestion', 'nitpick'];
+
+export function renderTopBody(review: Review): string {
+  const walkthrough = renderWalkthrough(review);
+  const headline = renderHeadline(review);
+  if (!walkthrough) return headline;
+  return `${walkthrough}\n\n${headline}`;
+}
+
+function renderHeadline(review: Review): string {
   if (review.issues.length === 0) {
     return 'No issues found.';
   }
-  const blocks = review.issues.filter((i) => i.severity === 'block').length;
-  const high = review.issues.filter((i) => i.severity === 'high').length;
-  const medium = review.issues.filter((i) => i.severity === 'medium').length;
-  const low = review.issues.filter((i) => i.severity === 'low').length;
-  const counts: string[] = [];
-  if (blocks) counts.push(`${blocks} block`);
-  if (high) counts.push(`${high} high`);
-  if (medium) counts.push(`${medium} medium`);
-  if (low) counts.push(`${low} low`);
-  const headline = counts.join(', ');
-  return `Review found ${headline} — see inline comments.`;
+  const counts = severityCounts(review.issues);
+  const parts = SEVERITY_DISPLAY_ORDER.filter((s) => counts[s] > 0).map((s) => `${counts[s]} ${s}`);
+  return `Review found ${parts.join(', ')} — see inline comments.`;
+}
+
+/**
+ * Render the walkthrough block: PR-level overview, per-file summaries,
+ * a reserved mermaid section (empty in phase 1). Returns an empty string
+ * when the walkthrough is empty so callers can skip the surrounding spacing.
+ */
+export function renderWalkthrough(review: Review): string {
+  const w = review.walkthrough;
+  if (!w) return '';
+  const hasContent = w.overview || w.files.length > 0 || w.mermaid;
+  if (!hasContent) return '';
+  const out: string[] = ['## Walkthrough'];
+  if (w.overview) out.push('', w.overview);
+  if (w.files.length > 0) {
+    out.push('', '### Files');
+    for (const f of w.files) {
+      out.push('', `- **${f.file}** — ${f.summary || '(no summary)'}`);
+    }
+  }
+  if (w.mermaid) {
+    out.push('', '### Diagram', '', '```mermaid', w.mermaid, '```');
+  }
+  return out.join('\n');
 }
