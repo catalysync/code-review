@@ -6,7 +6,9 @@ import { Command } from 'commander';
 import kleur from 'kleur';
 import { composePrompt } from './compose.js';
 import { detectStack } from './detect.js';
+import { formatReview, isOutputFormat, type OutputFormat } from './formatter.js';
 import { runReview } from './review.js';
+import { evaluateSeverityGate } from './severity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -106,10 +108,17 @@ program
   .option('--model <id>', 'Anthropic model id', 'claude-sonnet-4-6')
   .option('--max-tokens <n>', 'max output tokens', (v) => Number(v), 4096)
   .option('--dry-run', "don't post the review, just print it")
+  .option('--format <fmt>', 'output format for --dry-run: markdown | json', 'markdown')
+  .option('--no-fail-on-blockers', 'do not exit non-zero on blocker/security findings')
   .action(async (numberArg: string, opts) => {
     const number = Number(numberArg);
     if (!Number.isFinite(number)) {
       console.error(kleur.red('PR number must be a number'));
+      process.exit(2);
+    }
+    const format = (opts.format ?? 'markdown') as string;
+    if (!isOutputFormat(format)) {
+      console.error(kleur.red(`unknown --format: ${format} (expected markdown | json)`));
       process.exit(2);
     }
     try {
@@ -131,7 +140,20 @@ program
       } else {
         console.log();
         console.log(kleur.dim('--dry-run: not posted'));
-        console.log(JSON.stringify(result.review, null, 2));
+        console.log(formatReview(result.review, format as OutputFormat));
+      }
+
+      // Severity gate is the last thing — we always want the report printed
+      // even when we're about to exit non-zero, so CI logs are useful.
+      const gate = evaluateSeverityGate(result.review);
+      if (opts.failOnBlockers !== false && gate.blocked) {
+        console.error();
+        console.error(
+          kleur.red(
+            `severity gate: ${gate.triggering.length} blocker/security finding(s) — exiting 1`,
+          ),
+        );
+        process.exit(1);
       }
     } catch (err) {
       const e = err as Error;
