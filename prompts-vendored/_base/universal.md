@@ -80,7 +80,7 @@ review:
       line_start: 42
       line_end: 47
       category: security        # bug | security | performance | maintainability | convention
-      severity: high            # block | high | medium | low
+      severity: warning         # nitpick | suggestion | warning | blocker | security
       title: |
         5-10 words, plain English.
       why: |
@@ -93,7 +93,28 @@ review:
     "No" or "<OWASP-ish category>: <one-sentence summary>".
   test_coverage_assessment: |
     "adequate" / "missing for X" / "thin on Y".
+  walkthrough:
+    overview: |
+      One paragraph: the PR-level "what changed and why". May be empty when
+      the file-summary step has already produced this.
+    files:
+      - file: path/to/file.ext
+        summary: |
+          One paragraph: what changed in this file and why.
+    mermaid: ""   # reserved — leave empty unless the harness asks for a diagram.
 ```
+
+## Severity vocabulary
+
+Use this ladder. Be honest about what blocks.
+
+- **nitpick** — style or preference. The PR is fine without this change.
+- **suggestion** — non-blocking improvement worth considering.
+- **warning** — likely-bug or maintainability hazard. Reviewer should look but it does not have to block merge.
+- **blocker** — must fix before merge. A correctness, contract, or data-integrity defect.
+- **security** — security issue. Reserve for actual security defects (injection, auth bypass, secret leak, etc.), not generic security advice.
+
+`blocker` and `security` cause the CLI to exit non-zero. Don't reach for them lightly.
 
 ## Posting to GitHub
 

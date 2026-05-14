@@ -12,6 +12,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  */
 export const DEFAULT_PROMPT_ROOT = join(__dirname, '..', 'prompts-vendored');
 
+/**
+ * Resolve the prompt root in priority order:
+ *   1. explicit argument,
+ *   2. `CODE_REVIEW_PROMPT_ROOT` env var,
+ *   3. vendored snapshot that ships with this package.
+ *
+ * Used by the CLI so a downstream consumer can point at a sibling checkout
+ * of `code-review-prompts` instead of the vendored snapshot.
+ */
+export function resolvePromptRoot(override?: string): string {
+  if (override) return override;
+  if (process.env.CODE_REVIEW_PROMPT_ROOT) return process.env.CODE_REVIEW_PROMPT_ROOT;
+  return DEFAULT_PROMPT_ROOT;
+}
+
 function findMd(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {

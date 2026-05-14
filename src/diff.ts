@@ -61,12 +61,20 @@ export function filterDiff(diff: string, isExcluded: (path: string) => boolean):
   return sections.filter((s) => !isExcluded(s.path)).map((s) => s.body).join('\n');
 }
 
-interface FileSection {
+export interface FileSection {
   path: string;
   body: string;
 }
 
-function splitByFile(diff: string): FileSection[] {
+/**
+ * Split a unified diff into per-file sections. Exposed so callers (e.g. the
+ * file-summary step) can feed one file at a time to the LLM.
+ */
+export function splitByFile(diff: string): FileSection[] {
+  return splitByFileInternal(diff);
+}
+
+function splitByFileInternal(diff: string): FileSection[] {
   const sections: FileSection[] = [];
   const lines = diff.split('\n');
   let currentPath = '';
@@ -103,3 +111,14 @@ const DEFAULT_EXCLUDES: RegExp[] = [
 
 export const isLikelyGenerated = (path: string): boolean =>
   DEFAULT_EXCLUDES.some((re) => re.test(path));
+
+/**
+ * Convenience: split a diff into per-file annotated sections. Each section's
+ * `body` is the output of `annotateDiff` on that single file. Empty/dev-null
+ * sections are dropped.
+ */
+export function annotatePerFile(diff: string): FileSection[] {
+  return splitByFile(diff)
+    .filter((s) => s.path && !s.body.includes('+++ /dev/null'))
+    .map((s) => ({ path: s.path, body: annotateDiff(s.body) }));
+}
