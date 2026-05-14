@@ -105,8 +105,23 @@ The model produces a single YAML object matching the schema in `_base/universal.
 - **Inline review comments** anchored to `file:line_start..line_end`.
 - **`suggestion` blocks** when the fix is mechanical (rename, single import, dead branch). The user clicks "Commit suggestion" in the GitHub UI to apply.
 - **Multi-line suggestions** for ranges. Multi-step fixes that span non-contiguous regions go as separate suggestion comments.
-- **Top-level body**: at most one short sentence (`"Review found 1 high, 2 medium — see inline comments."`) or empty when there are no issues.
+- **Top-level body**: a walkthrough block (PR-level overview + per-file paragraphs, with a reserved mermaid section) followed by a one-sentence severity headline.
 - **Never** the YAML schema as a PR comment.
+
+## Phase 1 capabilities
+
+This release lands the foundation called out in [`docs/roadmap/coderabbit-parity.md`](docs/roadmap/coderabbit-parity.md):
+
+- **Severity model** — `nitpick | suggestion | warning | blocker | security`. `blocker` and `security` cause the CLI to exit non-zero. See [`docs/severity-policy.md`](docs/severity-policy.md).
+- **File-level summary step** — every reviewed file gets a one-paragraph "what changed and why" summary, produced by a dedicated prompt step (`src/file-summary.ts`). LLM calls are injected so they can be mocked in tests.
+- **PR walkthrough block** — file summaries are aggregated into a top-level walkthrough markdown block. The mermaid section is reserved for phase 4.
+- **Per-language prompt loader** — files are bucketed by extension (`.ts/.tsx/.mts/.cts`, `.js/.jsx/.mjs/.cjs`, `.py/.pyi`, `.md/.mdx`) and each bucket gets `_base/universal` + its language base. Set `CODE_REVIEW_PROMPT_ROOT` (or `--layer`) to point at a sibling checkout of `code-review-prompts`.
+- **Output formatter** — `--format markdown|json`. JSON round-trips through the `ReviewSchema` zod schema in `src/types.ts` so CI consumers get a stable shape.
+- **Severity gate** — `code-review pr <n>` exits 1 when any issue carries `blocker` or `security`. Pass `--no-fail-on-blockers` to opt out.
+
+## Wire it into your repo's pre-merge
+
+See [`docs/integrations/harness.md`](docs/integrations/harness.md) for the GitHub Action snippet and the `.claude/settings.json` `PreToolUse` hook that warns when `git merge` or `gh pr merge` is invoked without a green review.
 
 ## Add a new stack
 
