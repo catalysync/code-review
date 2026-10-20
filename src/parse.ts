@@ -1,5 +1,15 @@
 import { parse as parseYaml } from 'yaml';
-import { ReviewSchema, SEVERITIES, CATEGORIES, type Review, type Severity, type Category } from './types.js';
+import {
+  ReviewSchema,
+  SEVERITIES,
+  CATEGORIES,
+  TAGS,
+  type Review,
+  type Severity,
+  type Category,
+  type Location,
+  type Tag,
+} from './types.js';
 
 /**
  * Parse the model's response into a `Review`. The response is expected to
@@ -12,11 +22,13 @@ import { ReviewSchema, SEVERITIES, CATEGORIES, type Review, type Severity, type 
  */
 export function parseReview(modelText: string): Review {
   const yaml = extractYaml(modelText);
-  const parsed = parseYaml(yaml) as { review?: unknown };
-  if (!parsed || typeof parsed !== 'object' || !('review' in parsed)) {
+  const parsed = parseYaml(yaml) as { review?: unknown; issues?: unknown };
+  if (!parsed || typeof parsed !== 'object') {
     throw new Error('model output missing top-level `review:` key');
   }
-  return validateReview(parsed.review);
+  if ('review' in parsed) return coerceReview(parsed.review);
+  if ('issues' in parsed || 'summary' in parsed) return coerceReview(parsed);
+  throw new Error('model output missing top-level `review:` key');
 }
 
 function extractYaml(text: string): string {
@@ -41,7 +53,18 @@ function coerceCategory(raw: unknown): Category {
   return 'maintainability';
 }
 
-function validateReview(raw: unknown): Review {
+/**
+ * Validate a review-shaped object (from a tool call or parsed YAML) into a
+ * `Review`, softening unknown enum values rather than rejecting the review.
+ */
+export function coerceReview(raw: unknown): Review {
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      throw new Error('review is not an object');
+    }
+  }
   if (!raw || typeof raw !== 'object') throw new Error('review is not an object');
   const r = raw as Record<string, unknown>;
   const rawIssues = Array.isArray(r.issues) ? r.issues : [];
@@ -50,7 +73,9 @@ function validateReview(raw: unknown): Review {
   const candidate = {
     summary: typeof r.summary === 'string' ? r.summary.trim() : '',
     estimated_review_effort_1_to_5:
-      typeof r.estimated_review_effort_1_to_5 === 'number' ? r.estimated_review_effort_1_to_5 : 3,
+      typeof r.estimated_review_effort_1_to_5 === 'number'
+        ? Math.min(5, Math.max(1, Math.round(r.estimated_review_effort_1_to_5)))
+        : 3,
     issues,
     security_concerns: typeof r.security_concerns === 'string' ? r.security_concerns.trim() : 'No',
     test_coverage_assessment:
@@ -64,18 +89,47 @@ function coerceIssue(raw: unknown, index: number): unknown {
   if (!raw || typeof raw !== 'object') throw new Error(`issues[${index}] is not an object`);
   const i = raw as Record<string, unknown>;
   if (typeof i.file !== 'string') throw new Error(`issues[${index}].file missing`);
-  if (typeof i.line_start !== 'number') throw new Error(`issues[${index}].line_start missing`);
-  const line_end = typeof i.line_end === 'number' ? i.line_end : i.line_start;
+  const line_start = toLine(i.line_start);
+  if (line_start === undefined) throw new Error(`issues[${index}].line_start missing`);
+  const line_end = toLine(i.line_end) ?? line_start;
+  const locations = coerceLocations(i.locations);
   return {
     file: i.file,
-    line_start: i.line_start,
-    line_end,
+    line_start: Math.min(line_start, line_end),
+    line_end: Math.max(line_start, line_end),
     category: coerceCategory(i.category),
     severity: coerceSeverity(i.severity),
     title: typeof i.title === 'string' ? i.title.trim() : '',
     why: typeof i.why === 'string' ? i.why.trim() : '',
-    suggestion: typeof i.suggestion === 'string' ? i.suggestion.trim() : undefined,
+    suggestion: typeof i.suggestion === 'string' && i.suggestion.trim() ? i.suggestion.trim() : undefined,
+    ...(coerceTag(i.tag) ? { tag: coerceTag(i.tag) } : {}),
+    ...(typeof i.evidence === 'string' && i.evidence.trim() ? { evidence: i.evidence.trim() } : {}),
+    ...(locations.length ? { locations } : {}),
   };
+}
+
+function toLine(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, Math.trunc(raw));
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) return Number(raw.trim());
+  return undefined;
+}
+
+function coerceTag(raw: unknown): Tag | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const norm = raw.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return TAGS.find((t) => t.toLowerCase() === norm);
+}
+
+function coerceLocations(raw: unknown): Location[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((l) => {
+    if (!l || typeof l !== 'object') return [];
+    const o = l as Record<string, unknown>;
+    const start = toLine(o.line_start);
+    if (typeof o.file !== 'string' || !o.file || start === undefined) return [];
+    const end = toLine(o.line_end) ?? start;
+    return [{ file: o.file, line_start: Math.min(start, end), line_end: Math.max(start, end) }];
+  });
 }
 
 function coerceWalkthrough(

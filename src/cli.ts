@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import kleur from 'kleur';
 import { composePrompt } from './compose.js';
+import { DEFAULT_MAX_TOKENS, FALLBACK_MODEL, defaultModel } from './config.js';
 import { detectStack } from './detect.js';
 import { formatReview, isOutputFormat, type OutputFormat } from './formatter.js';
 import { runReview } from './review.js';
@@ -105,8 +106,9 @@ program
   .option('-d, --dir <path>', 'repo root for layer detection', process.cwd())
   .option('-l, --layer <name...>', 'override detected layers')
   .option('-p, --project <path>', 'project rules file')
-  .option('--model <id>', 'Anthropic model id', 'claude-sonnet-4-6')
-  .option('--max-tokens <n>', 'max output tokens', (v) => Number(v), 4096)
+  .option('--model <id>', 'model id (default: $ANTHROPIC_MODEL, else ' + FALLBACK_MODEL + ')')
+  .option('--base-url <url>', 'Anthropic-compatible API base URL (default: $ANTHROPIC_BASE_URL)')
+  .option('--max-tokens <n>', 'max output tokens (retried once at 2x on truncation)', (v) => Number(v), DEFAULT_MAX_TOKENS)
   .option('--dry-run', "don't post the review, just print it")
   .option('--format <fmt>', 'output format for --dry-run: markdown | json', 'markdown')
   .option('--no-fail-on-blockers', 'do not exit non-zero on blocker/security findings')
@@ -129,7 +131,8 @@ program
         prNumber: number,
         layers: opts.layer,
         projectRulesPath: opts.project,
-        model: opts.model,
+        model: opts.model ?? defaultModel(),
+        baseUrl: opts.baseUrl,
         maxTokens: opts.maxTokens,
         dryRun: opts.dryRun,
       });

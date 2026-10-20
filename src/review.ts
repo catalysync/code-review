@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { callAnthropic } from './anthropic.js';
+import { createAnthropicLlm } from './anthropic.js';
+import { DEFAULT_MAX_TOKENS, defaultModel } from './config.js';
 import { composePrompt } from './compose.js';
 import { detectStack } from './detect.js';
 import { annotateDiff, filterDiff, isLikelyGenerated, parseDiffFiles } from './diff.js';
@@ -20,6 +21,8 @@ export interface RunReviewArgs {
   maxTokens?: number;
   dryRun?: boolean;
   anthropicApiKey?: string;
+  /** Anthropic-compatible endpoint (DeepSeek, Z.ai GLM, a proxy). Falls back to ANTHROPIC_BASE_URL. */
+  baseUrl?: string;
   githubToken?: string;
 }
 
@@ -35,8 +38,6 @@ export interface RunReviewResult {
   posted?: { id: number; htmlUrl: string };
 }
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
-
 export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
   const layers = args.layers?.length ? args.layers : detectStack(args.repoRoot).leaves;
   if (layers.length === 0) {
@@ -51,13 +52,13 @@ export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
   const annotated = annotateDiff(filteredDiff);
   const userMessage = `Review the following pull request diff. PR #${pr.number} (${pr.additions}+ / ${pr.deletions}−). Output a single YAML object matching the schema in your system prompt — do not post that YAML as a PR comment.\n\n${annotated}`;
 
-  const result = await callAnthropic({
+  const llm = createAnthropicLlm({
     apiKey: args.anthropicApiKey,
-    model: args.model ?? DEFAULT_MODEL,
-    maxTokens: args.maxTokens ?? 4096,
-    systemPrompt,
-    userMessage,
+    baseURL: args.baseUrl,
+    model: args.model ?? defaultModel(),
+    maxTokens: args.maxTokens ?? DEFAULT_MAX_TOKENS,
   });
+  const result = await llm.text({ system: systemPrompt, user: userMessage });
   const review = parseReview(result.text);
 
   let posted: { id: number; htmlUrl: string } | undefined;
@@ -71,10 +72,10 @@ export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
     prompt: systemPrompt,
     promptBytes: Buffer.byteLength(systemPrompt, 'utf8'),
     diffBytes: Buffer.byteLength(annotated, 'utf8'),
-    tokensIn: result.inputTokens,
-    tokensOut: result.outputTokens,
-    cacheReadTokens: result.cacheReadInputTokens ?? 0,
-    cacheCreationTokens: result.cacheCreationInputTokens ?? 0,
+    tokensIn: result.usage.inputTokens,
+    tokensOut: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadInputTokens,
+    cacheCreationTokens: result.usage.cacheCreationInputTokens,
     posted,
   };
 }
