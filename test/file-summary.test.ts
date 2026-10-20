@@ -118,3 +118,47 @@ describe('buildWalkthrough', () => {
     expect(w.mermaid).toContain('sequenceDiagram');
   });
 });
+
+describe('generateWalkthrough', () => {
+  it('summarizes files and keeps a valid mermaid diagram', async () => {
+    const { generateWalkthrough } = await import('../src/walkthrough.js');
+    const llm: LlmCall = vi.fn(async ({ systemPrompt }) => ({
+      text: systemPrompt.includes('mermaid') ? '```mermaid\nsequenceDiagram\n  A->>B: call\n```' : 'Changed.',
+    }));
+    const w = await generateWalkthrough({
+      files: [{ file: 'a.rb', annotatedDiff: '+x' }],
+      llm,
+      diagram: true,
+      annotatedDiff: '+x',
+    });
+    expect(w.files).toEqual([{ file: 'a.rb', summary: 'Changed.' }]);
+    expect(w.mermaid).toBe('sequenceDiagram\n  A->>B: call');
+  });
+
+  it('never throws: failed summaries and diagrams degrade to placeholders', async () => {
+    const { generateWalkthrough } = await import('../src/walkthrough.js');
+    const llm: LlmCall = vi.fn(async () => {
+      throw new Error('rate limited');
+    });
+    const w = await generateWalkthrough({ files: [{ file: 'a.rb', annotatedDiff: '+x' }], llm, diagram: true, annotatedDiff: '+x' });
+    expect(w.files).toEqual([{ file: 'a.rb', summary: '(summary unavailable)' }]);
+    expect(w.mermaid).toBe('');
+  });
+
+  it('skips per-file summaries above maxFiles and drops non-mermaid diagram output', async () => {
+    const { generateWalkthrough, sanitizeMermaid } = await import('../src/walkthrough.js');
+    const llm: LlmCall = vi.fn(async () => ({ text: 'NONE' }));
+    const w = await generateWalkthrough({
+      files: [
+        { file: 'a', annotatedDiff: '' },
+        { file: 'b', annotatedDiff: '' },
+      ],
+      llm,
+      maxFiles: 1,
+    });
+    expect(w.files).toEqual([]);
+    expect(llm).not.toHaveBeenCalled();
+    expect(sanitizeMermaid('NONE')).toBe('');
+    expect(sanitizeMermaid('flowchart LR\n a-->b')).toBe('flowchart LR\n a-->b');
+  });
+});

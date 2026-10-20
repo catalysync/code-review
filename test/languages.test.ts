@@ -145,3 +145,24 @@ describe('promptForLanguage', () => {
     expect(leaves.unknown).toBeNull();
   });
 });
+
+describe('leavesForChangedFiles', () => {
+  it('adds a language base the repo-level detector missed', async () => {
+    const { leavesForChangedFiles } = await import('../src/languages.js');
+    expect(leavesForChangedFiles(['ruby/+rails'], ['app/models/a.rb', 'scripts/build.ts'])).toEqual([
+      'ruby/+rails',
+      'typescript/base',
+    ]);
+  });
+
+  it('does not add a family that is already covered', async () => {
+    const { leavesForChangedFiles } = await import('../src/languages.js');
+    expect(leavesForChangedFiles(['typescript/+react'], ['a.tsx', 'b.js'])).toEqual(['typescript/+react']);
+  });
+
+  it('falls back to the universal layer when nothing matches', async () => {
+    const { leavesForChangedFiles } = await import('../src/languages.js');
+    expect(leavesForChangedFiles([], ['README.md', 'Makefile'])).toEqual(['_base/universal']);
+    expect(leavesForChangedFiles([], ['main.go'])).toEqual(['go/base']);
+  });
+});

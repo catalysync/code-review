@@ -6,7 +6,17 @@ import type { PromptLayer } from './types.js';
  * `LANGUAGE_EXTENSIONS`, ensure the prompt file exists in the prompts repo,
  * extend the leaf map in `LANGUAGE_LEAVES`.
  */
-export const LANGUAGES = ['typescript', 'javascript', 'python', 'markdown', 'unknown'] as const;
+export const LANGUAGES = [
+  'typescript',
+  'javascript',
+  'python',
+  'ruby',
+  'go',
+  'rust',
+  'c',
+  'markdown',
+  'unknown',
+] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 /**
@@ -25,6 +35,13 @@ const LANGUAGE_EXTENSIONS: Record<string, Language> = {
   mjs: 'javascript',
   py: 'python',
   pyi: 'python',
+  rb: 'ruby',
+  rake: 'ruby',
+  erb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  c: 'c',
+  h: 'c',
   md: 'markdown',
   mdx: 'markdown',
 };
@@ -38,6 +55,10 @@ const LANGUAGE_LEAVES: Record<Language, string | null> = {
   typescript: 'typescript/base',
   javascript: 'javascript/base',
   python: 'python/base',
+  ruby: 'ruby/base',
+  go: 'go/base',
+  rust: 'rust/base',
+  c: 'c/base',
   markdown: null,
   unknown: null,
 };
@@ -94,4 +115,27 @@ export function promptForLanguage(opts: PromptForLanguageOptions): string {
  */
 export function languageLeaves(): Readonly<Record<Language, string | null>> {
   return LANGUAGE_LEAVES;
+}
+
+/**
+ * Merge repo-level detected leaves with per-file language leaves. A PR that
+ * touches a language the repo-level detector missed (a `.ts` script in a
+ * Rails app, say) gets that language's base layer too. A language family
+ * already covered by a detected leaf (e.g. `ruby/+rails` covers `ruby`) is
+ * not added again. Falls back to `_base/universal` when nothing matches.
+ */
+export function leavesForChangedFiles(detected: string[], changedFiles: string[]): string[] {
+  const out = [...detected];
+  const families = new Set(detected.map((l) => l.split('/')[0]));
+  for (const file of changedFiles) {
+    const leaf = LANGUAGE_LEAVES[detectLanguage(file)];
+    if (!leaf) continue;
+    const family = leaf.split('/')[0];
+    // The TypeScript layers are a superset of the JavaScript ones.
+    const covered = families.has(family) || (family === 'javascript' && families.has('typescript'));
+    if (covered) continue;
+    families.add(family);
+    out.push(leaf);
+  }
+  return out.length ? out : ['_base/universal'];
 }
