@@ -84,6 +84,8 @@ When the reviewer keeps flagging something that's fine, add a line to `REVIEW.md
 code-review init       Detect the stack; scaffold REVIEW.md, .claude/agents/reviewer.md, .github/workflows/code-review.yml
 code-review compose    Print the composed prompt (pipe it into another tool)
 code-review pr <n>     Review a PR: find → verify → post → converge
+code-review eval       Score the reviewer against evals/cases: known bugs found, known false alarms raised
+code-review feedback <n>  Record what happened to each review comment on a PR in .review/feedback.jsonl
 ```
 
 Main `pr` options:
@@ -100,6 +102,13 @@ Main `pr` options:
 | `--no-walkthrough`, `--diagram` | walkthrough on | Per-file summaries, mermaid diagram |
 | `--max-tokens <n>` | 8192 | Finder budget (retried once at 2x) |
 | `--no-fail-on-blockers` | gate on | Don't exit 1 |
+
+## Measuring it
+
+Two commands keep the reviewer honest over time, the way Anthropic measures its own:
+
+- **`code-review eval`** runs the pipeline on small PRs with known answers (`evals/cases`) and prints how many real bugs it found, how many known false alarms it raised, and whether clean PRs stayed clean. Run it before and after changing a prompt or model. `--min-recall 1 --max-false-alarms 0` turns it into a CI check. See [`evals/README.md`](evals/README.md).
+- **`code-review feedback <n> --owner X --repo Y`** reads the bot's comments on a PR and records each outcome: fixed, disputed, intentional, acknowledged or ignored. It prints which kinds of comment are noisiest. Disputed and ignored comments are what to tune `REVIEW.md` against, and the best new eval cases.
 
 ## CodeRabbit-style extras, isolated
 
