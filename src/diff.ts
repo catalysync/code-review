@@ -71,6 +71,117 @@ function stripDiffPath(raw: string, prefix: 'a/' | 'b/'): string {
   return unquoted.startsWith(prefix) ? unquoted.slice(prefix.length) : unquoted;
 }
 
+export interface HunkRange {
+  /** First right-side line in the hunk (inclusive). */
+  start: number;
+  /** Last right-side line in the hunk (inclusive). */
+  end: number;
+}
+
+export interface FileDiffInfo {
+  path: string;
+  deleted: boolean;
+  /** Right-side line ranges GitHub accepts review comments on. */
+  hunks: HunkRange[];
+  /** Right-side lines added by this diff (`+` lines). */
+  added: Set<number>;
+  /** Right-side line → content (added and context lines). */
+  lines: Map<number, string>;
+}
+
+/**
+ * Parse a unified diff into per-file right-side line information. This is the
+ * ground truth for which lines a GitHub review comment can anchor to: a
+ * comment (or multi-line range) must sit entirely inside one hunk on the
+ * RIGHT side, otherwise `pulls.createReview` rejects the whole review.
+ */
+export function parseDiffFiles(rawDiff: string): Map<string, FileDiffInfo> {
+  const files = new Map<string, FileDiffInfo>();
+  let current: FileDiffInfo | null = null;
+  let oldPath: string | null = null;
+  let hunk: HunkRange | null = null;
+  let rightLine = 0;
+
+  const closeHunk = () => {
+    if (current && hunk && hunk.end >= hunk.start) current.hunks.push(hunk);
+    hunk = null;
+  };
+
+  for (const line of rawDiff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      closeHunk();
+      current = null;
+      oldPath = null;
+      continue;
+    }
+    if (line.startsWith('--- ') && current === null) {
+      oldPath = stripDiffPath(line.slice(4), 'a/');
+      continue;
+    }
+    if (line.startsWith('+++ ') && current === null) {
+      const path = stripDiffPath(line.slice(4), 'b/');
+      const deleted = path === '/dev/null';
+      const key = deleted ? oldPath : path;
+      if (!key || key === '/dev/null') continue;
+      current = { path: key, deleted, hunks: [], added: new Set(), lines: new Map() };
+      files.set(key, current);
+      continue;
+    }
+    if (current === null) continue;
+    if (line.startsWith('@@')) {
+      closeHunk();
+      const m = /\+(\d+)(?:,(\d+))?/.exec(line);
+      rightLine = m ? Number(m[1]) : 0;
+      hunk = { start: rightLine, end: rightLine - 1 };
+      continue;
+    }
+    if (!hunk) continue;
+    const h: HunkRange = hunk;
+    if (line.startsWith('+')) {
+      current.added.add(rightLine);
+      current.lines.set(rightLine, line.slice(1));
+      h.end = rightLine;
+      rightLine += 1;
+    } else if (line.startsWith(' ')) {
+      current.lines.set(rightLine, line.slice(1));
+      h.end = rightLine;
+      rightLine += 1;
+    }
+  }
+  closeHunk();
+  return files;
+}
+
+/** True when `start..end` sits entirely inside one right-side hunk of `file`. */
+export function isRangeCommentable(
+  files: Map<string, FileDiffInfo>,
+  file: string,
+  start: number,
+  end: number,
+): boolean {
+  const info = files.get(file);
+  if (!info || info.deleted) return false;
+  const lo = Math.min(start, end);
+  const hi = Math.max(start, end);
+  if (lo < 1) return false;
+  return info.hunks.some((h) => lo >= h.start && hi <= h.end);
+}
+
+/** True when any line in `start..end` was added by the diff. */
+export function rangeTouchesAddedLines(
+  files: Map<string, FileDiffInfo>,
+  file: string,
+  start: number,
+  end: number,
+): boolean {
+  const info = files.get(file);
+  if (!info) return false;
+  for (let n = Math.min(start, end); n <= Math.max(start, end); n++) {
+    if (info.added.has(n)) return true;
+  }
+  return false;
+}
+
 /** Filter the diff down to a subset of paths (e.g. drop generated files). */
 export function filterDiff(diff: string, isExcluded: (path: string) => boolean): string {
   const sections = splitByFile(diff);

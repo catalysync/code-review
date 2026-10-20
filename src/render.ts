@@ -1,3 +1,4 @@
+import { isRangeCommentable, type FileDiffInfo } from './diff.js';
 import { severityCounts } from './severity.js';
 import type { Issue, Review, Severity } from './types.js';
 
@@ -47,11 +48,43 @@ function renderIssueBody(issue: Issue): string {
 }
 
 /**
+ * Split issues into those GitHub will accept as inline comments and those it
+ * would reject (file not in the diff, deleted file, or a line range that is
+ * not fully inside one right-side hunk). A single bad anchor makes GitHub
+ * reject the entire review with a 422, so the second group is rendered in
+ * the top-level body instead.
+ */
+export function partitionIssues(
+  issues: Issue[],
+  diffFiles: Map<string, FileDiffInfo>,
+): { inline: Issue[]; outside: Issue[] } {
+  const inline: Issue[] = [];
+  const outside: Issue[] = [];
+  for (const issue of issues) {
+    if (isRangeCommentable(diffFiles, issue.file, issue.line_start, issue.line_end)) inline.push(issue);
+    else outside.push(issue);
+  }
+  return { inline, outside };
+}
+
+export interface RenderReviewOptions {
+  commitId: string;
+  /**
+   * Parsed diff used to validate anchors. When given, issues that can't be
+   * anchored are moved to a "Findings outside the diff" list in the body.
+   */
+  diffFiles?: Map<string, FileDiffInfo>;
+}
+
+/**
  * Build the GitHub review payload from a parsed `Review`. The top-level body
  * carries the walkthrough block (if any) plus a one-sentence severity headline.
  */
-export function renderReview(review: Review, opts: { commitId: string }): GhReviewPayload {
-  const comments: GhReviewComment[] = review.issues.map((issue) => {
+export function renderReview(review: Review, opts: RenderReviewOptions): GhReviewPayload {
+  const { inline, outside } = opts.diffFiles
+    ? partitionIssues(review.issues, opts.diffFiles)
+    : { inline: review.issues, outside: [] as Issue[] };
+  const comments: GhReviewComment[] = inline.map((issue) => {
     const c: GhReviewComment = {
       path: issue.file,
       body: renderIssueBody(issue),
@@ -65,13 +98,25 @@ export function renderReview(review: Review, opts: { commitId: string }): GhRevi
     return c;
   });
 
-  const body = renderTopBody(review);
+  const body = [renderTopBody(review), renderOutsideDiff(outside)].filter(Boolean).join('\n\n');
   return {
     commit_id: opts.commitId,
     event: 'COMMENT',
     body,
     comments,
   };
+}
+
+export function renderOutsideDiff(issues: Issue[]): string {
+  if (issues.length === 0) return '';
+  const out = ['### Findings outside the diff', ''];
+  for (const issue of issues) {
+    const range =
+      issue.line_start === issue.line_end ? `${issue.line_start}` : `${issue.line_start}-${issue.line_end}`;
+    const why = (issue.why || issue.title).replace(/\s+/g, ' ').trim();
+    out.push(`- \`${issue.file}:${range}\` **${issue.category}/${issue.severity}** — ${why}`);
+  }
+  return out.join('\n');
 }
 
 /** Display order for severities in the headline — most serious first. */

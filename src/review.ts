@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { callAnthropic } from './anthropic.js';
 import { composePrompt } from './compose.js';
 import { detectStack } from './detect.js';
-import { annotateDiff, filterDiff, isLikelyGenerated } from './diff.js';
+import { annotateDiff, filterDiff, isLikelyGenerated, parseDiffFiles } from './diff.js';
 import { fetchPr, makeOctokit, postReview } from './github.js';
 import { parseReview } from './parse.js';
 import { renderReview } from './render.js';
@@ -62,7 +62,7 @@ export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
 
   let posted: { id: number; htmlUrl: string } | undefined;
   if (!args.dryRun) {
-    const payload = renderReview(review, { commitId: pr.headSha });
+    const payload = renderReview(review, { commitId: pr.headSha, diffFiles: parseDiffFiles(pr.diff) });
     posted = await postReview(octokit, args.owner, args.repo, args.prNumber, payload);
   }
 
