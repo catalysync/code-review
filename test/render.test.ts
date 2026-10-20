@@ -130,4 +130,50 @@ describe('renderReview', () => {
     expect(out).toContain('```mermaid');
     expect(out).toContain('sequenceDiagram');
   });
+
+  it('renders tag, evidence, class-of-bug locations and the fingerprint marker', () => {
+    const payload = renderReview(
+      {
+        ...baseReview,
+        issues: [
+          issue({
+            tag: 'Important',
+            severity: 'blocker',
+            title: 'Unpermitted attribute',
+            evidence: 'a.py:10 `permit(:x)`',
+            locations: [{ file: 'b.py', line_start: 3, line_end: 4 }],
+            fingerprint: 'abc',
+            loc_fingerprint: 'def',
+          }),
+        ],
+      },
+      { commitId: 'abc' },
+    );
+    const body = payload.comments[0].body;
+    expect(body.startsWith('**Important** · `bug/blocker` — Unpermitted attribute')).toBe(true);
+    expect(body).toContain('Evidence: a.py:10 `permit(:x)`');
+    expect(body).toContain('Same issue at: `b.py:3-4`');
+    expect(body).toContain('<!-- cr:fp=abc loc=def -->');
+  });
+
+  it('marks findings the verifier could not check as unverified', () => {
+    const payload = renderReview(
+      {
+        ...baseReview,
+        issues: [issue({ verification: { verdict: 'error', confirmed: 0, rejected: 0, evidence: '', reason: 'x' } })],
+      },
+      { commitId: 'abc' },
+    );
+    expect(payload.comments[0].body).toContain('Unverified');
+  });
+
+  it('does not repost already-posted findings and says so in the count line', () => {
+    const payload = renderReview(
+      { ...baseReview, issues: [issue({ already_posted: true }), issue({ title: 'new one' })] },
+      { commitId: 'abc', footer: 'FOOTER', marker: '<!-- m -->' },
+    );
+    expect(payload.comments).toHaveLength(1);
+    expect(payload.body.startsWith('**1 issue** (1 Important) — 1 warning (1 already reported earlier, not repeated).')).toBe(true);
+    expect(payload.body.endsWith('FOOTER\n\n<!-- m -->')).toBe(true);
+  });
 });

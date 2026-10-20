@@ -9,7 +9,9 @@ import { DEFAULT_MAX_TOKENS, FALLBACK_MODEL, defaultModel } from './config.js';
 import { detectStack } from './detect.js';
 import { formatReview, isOutputFormat, type OutputFormat } from './formatter.js';
 import { runReview } from './review.js';
-import { evaluateSeverityGate } from './severity.js';
+import { readProjectRules } from './project-rules.js';
+import { renderHeadline } from './render.js';
+import { effectiveTag, evaluateSeverityGate } from './severity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -83,7 +85,7 @@ program
   .description('Print the composed prompt for the current repo (or for explicit layers).')
   .option('-d, --dir <path>', 'repo root', process.cwd())
   .option('-l, --layer <name...>', 'override detected layers (e.g. python/+fastapi)')
-  .option('-p, --project <path>', 'project rules file', undefined)
+  .option('-p, --project <path>', 'project rules file (default: REVIEW.md and/or .review/project.md)', undefined)
   .action((opts) => {
     const root = resolve(opts.dir);
     const layers = opts.layer?.length ? opts.layer : detectStack(root).leaves;
@@ -91,27 +93,40 @@ program
       console.error(kleur.red('no layers detected'));
       process.exit(1);
     }
-    const projectRules = opts.project && existsSync(opts.project) ? readFileSync(opts.project, 'utf8') : undefined;
-    const projectFromConvention = join(root, '.review', 'project.md');
-    const finalProjectRules =
-      projectRules ?? (existsSync(projectFromConvention) ? readFileSync(projectFromConvention, 'utf8') : undefined);
-    process.stdout.write(composePrompt({ leaves: layers, projectRules: finalProjectRules }));
+    const rules = readProjectRules(root, opts.project);
+    process.stdout.write(composePrompt({ leaves: layers, projectRules: rules.text }));
   });
+
+const toInt = (v: string) => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`expected a non-negative integer, got ${v}`);
+  return n;
+};
 
 program
   .command('pr <number>')
-  .description('Review a GitHub pull request.')
+  .description('Review a GitHub pull request: find → verify → post → converge.')
   .requiredOption('--owner <owner>', 'GitHub owner')
   .requiredOption('--repo <repo>', 'GitHub repo name')
-  .option('-d, --dir <path>', 'repo root for layer detection', process.cwd())
+  .option('-d, --dir <path>', 'repo root for layer detection and REVIEW.md', process.cwd())
   .option('-l, --layer <name...>', 'override detected layers')
-  .option('-p, --project <path>', 'project rules file')
-  .option('--model <id>', 'model id (default: $ANTHROPIC_MODEL, else ' + FALLBACK_MODEL + ')')
+  .option('-p, --project <path>', 'project rules file (default: REVIEW.md and/or .review/project.md)')
+  .option('--model <id>', `model id (default: $ANTHROPIC_MODEL, else ${FALLBACK_MODEL})`)
   .option('--base-url <url>', 'Anthropic-compatible API base URL (default: $ANTHROPIC_BASE_URL)')
-  .option('--max-tokens <n>', 'max output tokens (retried once at 2x on truncation)', (v) => Number(v), DEFAULT_MAX_TOKENS)
+  .option('--max-tokens <n>', 'max output tokens for the finder (retried once at 2x on truncation)', toInt, DEFAULT_MAX_TOKENS)
+  .option('--verify-votes <n>', 'verifier calls per finding; majority wins; 0 disables verification', toInt, 1)
+  .option('--verify-model <id>', 'model for the verifier (default: same as --model)')
+  .option('--max-nits <n>', 'max Nit findings per review', toInt, 3)
+  .option('--max-pre-existing <n>', 'max Pre-existing findings per review', toInt, 3)
+  .option('--max-rounds <n>', 'after N review rounds, post a step-back note instead; 0 = no cap', toInt, 3)
+  .option('--since <sha>', 'review only changes since this commit')
+  .option('--no-incremental', 'always review the full PR diff, even after the first round')
+  .option('--no-walkthrough', 'skip the per-file walkthrough summaries')
+  .option('--diagram', 'add a mermaid diagram to the walkthrough (one extra call)')
+  .option('--no-tools', 'ask for YAML text instead of a submit_review tool call (for providers without tool use)')
   .option('--dry-run', "don't post the review, just print it")
   .option('--format <fmt>', 'output format for --dry-run: markdown | json', 'markdown')
-  .option('--no-fail-on-blockers', 'do not exit non-zero on blocker/security findings')
+  .option('--no-fail-on-blockers', 'do not exit non-zero on verified Important blocker/security findings')
   .action(async (numberArg: string, opts) => {
     const number = Number(numberArg);
     if (!Number.isFinite(number)) {
@@ -135,15 +150,25 @@ program
         baseUrl: opts.baseUrl,
         maxTokens: opts.maxTokens,
         dryRun: opts.dryRun,
+        verifyVotes: opts.verifyVotes,
+        verifyModel: opts.verifyModel,
+        maxNits: opts.maxNits,
+        maxPreExisting: opts.maxPreExisting,
+        maxRounds: opts.maxRounds,
+        since: opts.since,
+        incremental: opts.incremental,
+        walkthrough: opts.walkthrough,
+        diagram: opts.diagram,
+        useTools: opts.tools,
       });
       printReportSummary(result);
       if (result.posted) {
         console.log();
         console.log(kleur.green('✓ posted: ') + result.posted.htmlUrl);
-      } else {
+      } else if (opts.dryRun) {
         console.log();
         console.log(kleur.dim('--dry-run: not posted'));
-        console.log(formatReview(result.review, format as OutputFormat));
+        console.log(result.capped ? result.body : formatReview(result.review, format as OutputFormat));
       }
 
       // Severity gate is the last thing — we always want the report printed
@@ -153,7 +178,7 @@ program
         console.error();
         console.error(
           kleur.red(
-            `severity gate: ${gate.triggering.length} blocker/security finding(s) — exiting 1`,
+            `severity gate: ${gate.triggering.length} verified Important blocker/security finding(s) — exiting 1`,
           ),
         );
         process.exit(1);
@@ -166,13 +191,28 @@ program
   });
 
 function printReportSummary(result: Awaited<ReturnType<typeof runReview>>): void {
+  for (const w of result.warnings) console.log(kleur.yellow('warning: ') + w);
+  if (result.capped) {
+    console.log(kleur.bold(`round cap reached (${result.round - 1} rounds) — step-back note instead of a review`));
+    return;
+  }
   const r = result.review;
-  console.log(kleur.bold(`${r.issues.length} issue(s) — effort ${r.estimated_review_effort_1_to_5}/5`));
+  console.log(kleur.bold(renderHeadline(r).replace(/\*\*/g, '').replace(/\s*See inline comments\.$/, '')));
   for (const issue of r.issues) {
     const sev = severityColor(issue.severity)(issue.severity);
-    console.log(`  ${sev} ${kleur.cyan(`${issue.file}:${issue.line_start}`)} — ${issue.title || issue.why}`);
+    const tag = effectiveTag(issue);
+    const repeat = issue.already_posted ? kleur.dim(' (already posted)') : '';
+    console.log(`  ${tag.padEnd(12)} ${sev} ${kleur.cyan(`${issue.file}:${issue.line_start}`)} — ${issue.title || issue.why}${repeat}`);
   }
+  const s = result.stats;
   console.log();
+  console.log(
+    kleur.dim(
+      `round ${result.round}${result.since ? ` (changes since ${result.since.slice(0, 7)})` : ''} · ` +
+        `${s.candidates} candidate(s): ${s.ungrounded} ungrounded, ${s.rejected} rejected, ${s.style} style-only, ` +
+        `${s.capped} over cap, ${s.duplicates} already posted, ${s.unverified} unverified`,
+    ),
+  );
   console.log(
     kleur.dim(
       `tokens: ${result.tokensIn} in (cache: ${result.cacheReadTokens} read / ${result.cacheCreationTokens} created), ${result.tokensOut} out`,

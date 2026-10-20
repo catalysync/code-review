@@ -1,5 +1,5 @@
-import { renderWalkthrough } from './render.js';
-import { severityCounts } from './severity.js';
+import { renderHeadline, renderWalkthrough } from './render.js';
+import { effectiveTag, severityCounts } from './severity.js';
 import { ReviewSchema, type Review, type Severity } from './types.js';
 
 export type OutputFormat = 'markdown' | 'json';
@@ -30,10 +30,10 @@ function formatJson(review: Review): string {
 const SEVERITY_DISPLAY_ORDER: Severity[] = ['security', 'blocker', 'warning', 'suggestion', 'nitpick'];
 
 function formatMarkdown(review: Review): string {
-  const out: string[] = [];
+  const out: string[] = [renderHeadline(review).replace(/\s*See inline comments\.$/, ''), ''];
 
   const walkthrough = renderWalkthrough(review);
-  if (walkthrough) out.push(walkthrough);
+  if (walkthrough) out.push(walkthrough, '');
 
   out.push('## Summary');
   out.push(review.summary || '(no summary)');
@@ -53,10 +53,18 @@ function formatMarkdown(review: Review): string {
           : `${issue.line_start}-${issue.line_end}`;
       out.push(
         '',
-        `### ${issue.file}:${range} — ${issue.category}/${issue.severity}`,
+        `### ${issue.file}:${range} — ${effectiveTag(issue)} · ${issue.category}/${issue.severity}${issue.already_posted ? ' (already posted)' : ''}`,
         '',
-        issue.why || issue.title || '(no message)',
+        issue.title && issue.why ? `**${issue.title}** — ${issue.why}` : issue.why || issue.title || '(no message)',
       );
+      if (issue.evidence) out.push('', `Evidence: ${issue.evidence}`);
+      if (issue.locations?.length) {
+        out.push('', `Same issue at: ${issue.locations.map((l) => `${l.file}:${l.line_start}`).join(', ')}`);
+      }
+      if (issue.verification) {
+        const v = issue.verification;
+        out.push('', `Verification: ${v.verdict} (${v.confirmed} confirm / ${v.rejected} reject)${v.evidence ? ` — ${v.evidence}` : ''}`);
+      }
       if (issue.suggestion) {
         out.push('', '```suggestion', issue.suggestion.trim(), '```');
       }

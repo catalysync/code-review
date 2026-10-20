@@ -82,7 +82,8 @@ describe('formatReview markdown', () => {
     expect(md).toContain('## Summary');
     expect(md).toContain('Effort: 2/5 — 1 security');
     expect(md).toContain('## Issues');
-    expect(md).toContain('src/router.py:12-14 — security/security');
+    expect(md).toContain('src/router.py:12-14 — Important · security/security');
+    expect(md.startsWith('**1 issue** (1 Important)')).toBe(true);
     expect(md).toContain('```suggestion');
     expect(md).toContain('## Security concerns');
     expect(md).toContain('## Test coverage');
