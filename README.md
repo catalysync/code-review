@@ -1,141 +1,124 @@
 # code-review
 
-Layered LLM code review for any repo. Composes universal + language + framework + project rules; calls Claude; posts inline GitHub review comments with `suggestion` blocks for one-click apply.
+Layered LLM code review for any repo. It reviews a GitHub pull request, **checks every finding before posting it**, posts inline comments with one-click `suggestion` blocks, and keeps re-reviews short. It follows the process in Anthropic's [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/): predictable output over volume.
 
-Pairs with [`@catalysync/code-review-prompts`](https://github.com/catalysync/code-review-prompts) (the prompt library this ships vendored).
+Pairs with [`@catalysync/code-review-prompts`](https://github.com/catalysync/code-review-prompts), the prompt library this ships vendored.
 
-## Why
+## How a review runs
 
-Generic LLM reviewers miss the rules that matter to your team and re-suggest the choices you've already considered. CodeRabbit-style tools solve that with hand-curated rules, but they're closed source. This is the OSS shape:
+```
+find  →  verify  →  post  →  converge
+```
 
-- **Layer 1 — universal rules**: role, calibration, output schema, tone. Adapted from PR-Agent.
-- **Layer 2 — stack rules**: per-language and per-framework. Lifted from clippy / gosec / bandit / eslint-plugin-react / tiangolo's FastAPI template / Rails security guide.
-- **Layer 3 — project rules**: your repo's `.review/project.md`. The deliberate choices that look like bugs but aren't (e.g. "we use HTTPBearer, don't suggest OAuth2PasswordBearer"), the recurring real issues your team keeps catching.
+1. **Find.** One call reads the diff with three layers of rules (universal → language/framework → your `REVIEW.md`) and returns findings through a `submit_review` tool call, validated against a schema. No free-text parsing. If the output is cut off, it retries once with a bigger budget, then fails with a clear "review truncated" error.
+2. **Verify.** Every finding goes to a separate verifier call that sees the finding, the cited code and its surroundings, and must confirm it with file:line evidence. `--verify-votes 3` takes a majority of three. Rejected and style-only findings are dropped.
+3. **Post.**
+   - Each finding is tagged **Important**, **Nit** (max 3) or **Pre-existing** (code the PR didn't touch, max 3).
+   - Findings whose lines aren't in the diff go into the summary instead of inline. One stray line number used to make GitHub reject the whole review.
+   - The summary starts with a count and says "No issues found" when there are none.
+   - Each comment carries a hidden fingerprint, so the same finding is never posted twice.
+4. **Converge.**
+   - After the first round, re-reviews only look at commits since the last reviewed one (`--since`, or automatic).
+   - After `--max-rounds` (default 3) it posts one note asking the author to step back instead of another round.
+   - The model is told to report a whole class of bug once, listing every location.
 
-The harness composes the three at runtime and runs them against a PR diff.
+**CI gate.** The command exits 1 only on **verified, Important** findings with blocker/security severity, never on a single unverified opinion. Add `--no-fail-on-blockers` to make it advisory.
 
 ## Install
 
-```bash
-npm install -g @catalysync/code-review
-```
-
-Or pin per-project:
+Not on npm yet. Run it from a clone:
 
 ```bash
-pnpm add -D @catalysync/code-review
+git clone https://github.com/catalysync/code-review && cd code-review
+pnpm install && pnpm build
+alias code-review="node $PWD/dist/cli.js"
 ```
 
 ## Quickstart
 
-In a repo:
-
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-export GITHUB_TOKEN=ghp_...
+export GITHUB_TOKEN=$(gh auth token)
 
-code-review init                              # detect stack, scaffold .review/ + templates
-code-review pr 42 --owner you --repo proj    # review PR #42 and post inline comments
+cd /path/to/your/repo
+code-review init                                   # REVIEW.md + Claude Code agent + GitHub workflow
+code-review pr 42 --owner you --repo proj --dry-run  # print the review, post nothing
+code-review pr 42 --owner you --repo proj            # post it
 ```
 
-To preview without posting:
+Start with `--dry-run` for a week and tune `REVIEW.md` before letting it post or block merges.
+
+## Other models (DeepSeek, GLM, anything Anthropic-compatible)
+
+The CLI speaks the Anthropic Messages API, so any provider with an Anthropic-compatible endpoint works:
 
 ```bash
-code-review pr 42 --owner you --repo proj --dry-run
+# DeepSeek
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_API_KEY=$DEEPSEEK_KEY \
+  code-review pr 42 --owner you --repo proj --model deepseek-flash --verify-model deepseek-flash --dry-run
+
+# Z.ai GLM
+ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic ANTHROPIC_API_KEY=$ZAI_KEY \
+  code-review pr 42 --owner you --repo proj --model glm-4.7 --dry-run
 ```
 
-## Three ways to run it
+- `--model` defaults to `$ANTHROPIC_MODEL`, and `--base-url` to `$ANTHROPIC_BASE_URL`.
+- A cheaper `--verify-model` keeps cost down.
+- If a provider can't do tool calls, add `--no-tools` to fall back to YAML output.
+- Prompt caching (`cache_control`) is used where supported; other providers ignore it.
 
-### 1. Claude Code subagent (recommended for human-driven review)
+## REVIEW.md
 
-`code-review init` writes `.claude/agents/reviewer.md`. The agent calls `code-review compose` to get the layered prompt, reads the diff, and renders inline review comments. Posts via `gh api` when you ask it to.
+`code-review init` writes a short `REVIEW.md` at the repo root. Keep it short. It tells the reviewer:
 
-### 2. CLI (for codex, scripts, anything that's not Claude Code)
+- **what failure looks like here**: "a migration that locks a big table", "royalties counted twice", "docs that lie"
+- **what not to flag**: deliberate choices that look like bugs
+- **paths to skip**: generated code, vendored files
+- **always flag**: the mistakes your team keeps catching
 
-The `code-review` binary works against any LLM that speaks the Anthropic API. Invoke from a shell or a hook.
-
-### 3. GitHub Action (for always-on auto-review)
-
-`code-review init` also writes `.github/workflows/code-review.yml`. Set the `ANTHROPIC_API_KEY` repo secret and every PR gets reviewed.
+When the reviewer keeps flagging something that's fine, add a line to `REVIEW.md`. When it keeps finding the same real bug, add a lint rule or a line in `CLAUDE.md` so the code stops being written that way. A legacy `.review/project.md` is still read.
 
 ## Commands
 
 ```
-code-review init                Detect stack, scaffold .review/ + .claude/agents/ + .github/workflows/.
-code-review compose             Print the composed prompt for stdin or piping to your own tool.
-code-review pr <number>         Review a GitHub PR. Posts inline review comments with suggestion blocks.
+code-review init       Detect the stack; scaffold REVIEW.md, .claude/agents/reviewer.md, .github/workflows/code-review.yml
+code-review compose    Print the composed prompt (pipe it into another tool)
+code-review pr <n>     Review a PR: find → verify → post → converge
 ```
 
-Run `code-review <cmd> --help` for full options.
+Main `pr` options:
 
-## Project rules — Layer 3
+| Option | Default | What it does |
+| --- | --- | --- |
+| `--dry-run` / `--format markdown\|json` | off | Print instead of posting |
+| `--model`, `--base-url` | env | Provider and model |
+| `--verify-votes <n>` | 1 | Verifier calls per finding; 0 turns verification off |
+| `--verify-model <id>` | `--model` | Cheaper model for verification |
+| `--max-nits`, `--max-pre-existing` | 3, 3 | Cap low-value findings |
+| `--max-rounds <n>` | 3 | Step-back note after N rounds; 0 = no cap |
+| `--since <sha>` / `--no-incremental` | auto | Diff-only re-review control |
+| `--no-walkthrough`, `--diagram` | walkthrough on | Per-file summaries, mermaid diagram |
+| `--max-tokens <n>` | 8192 | Finder budget (retried once at 2x) |
+| `--no-fail-on-blockers` | gate on | Don't exit 1 |
 
-After `init`, edit `.review/project.md`:
+## CodeRabbit-style extras, isolated
 
-```markdown
----
-id: my-project
-extends: ["python/+fastapi"]
----
+The walkthrough (per-file summaries) and the optional mermaid diagram are separate calls. If they fail, the review still posts without them, so they can never block or break a review.
 
-## NOT bugs — don't flag
+## Three ways to run it
 
-- We use `HTTPBearer(auto_error=False)` to control the error envelope. Don't suggest `OAuth2PasswordBearer`.
-- Lowercase commit messages ≤30 chars are house style.
-- Migrations split one-table-per-file. Don't ask us to combine.
-
-## Always flag (project-specific)
-
-- Any `console.log` outside `scripts/`.
-- New `any` types added to `packages/api/`.
-```
-
-The reviewer reads this before flagging anything. This is the layer that makes review feel useful instead of noisy.
-
-## Token efficiency
-
-The system prompt is the same on every review for the same repo (~5–20 KB). The harness marks it for [Anthropic's prompt caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) (`cache_control: { type: "ephemeral" }`) so subsequent reviews within ~5 minutes pay ~10% of the input-token cost on that segment. For a repo doing many small PRs, this is the difference between a 5¢ and a 0.5¢ review.
-
-The harness also drops likely-generated files from the diff before sending: `pnpm-lock.yaml`, `package-lock.json`, `*.min.js`, `dist/`, `__snapshots__/*.snap`, and friends. See `src/diff.ts` for the full list.
-
-## Output format
-
-The model produces a single YAML object matching the schema in `_base/universal.md`. The harness parses it and renders to GitHub:
-
-- **Inline review comments** anchored to `file:line_start..line_end`.
-- **`suggestion` blocks** when the fix is mechanical (rename, single import, dead branch). The user clicks "Commit suggestion" in the GitHub UI to apply.
-- **Multi-line suggestions** for ranges. Multi-step fixes that span non-contiguous regions go as separate suggestion comments.
-- **Top-level body**: a walkthrough block (PR-level overview + per-file paragraphs, with a reserved mermaid section) followed by a one-sentence severity headline.
-- **Never** the YAML schema as a PR comment.
-
-## Phase 1 capabilities
-
-This release lands the foundation called out in [`docs/roadmap/coderabbit-parity.md`](docs/roadmap/coderabbit-parity.md):
-
-- **Severity model** — `nitpick | suggestion | warning | blocker | security`. `blocker` and `security` cause the CLI to exit non-zero. See [`docs/severity-policy.md`](docs/severity-policy.md).
-- **File-level summary step** — every reviewed file gets a one-paragraph "what changed and why" summary, produced by a dedicated prompt step (`src/file-summary.ts`). LLM calls are injected so they can be mocked in tests.
-- **PR walkthrough block** — file summaries are aggregated into a top-level walkthrough markdown block. The mermaid section is reserved for phase 4.
-- **Per-language prompt loader** — files are bucketed by extension (`.ts/.tsx/.mts/.cts`, `.js/.jsx/.mjs/.cjs`, `.py/.pyi`, `.md/.mdx`) and each bucket gets `_base/universal` + its language base. Set `CODE_REVIEW_PROMPT_ROOT` (or `--layer`) to point at a sibling checkout of `code-review-prompts`.
-- **Output formatter** — `--format markdown|json`. JSON round-trips through the `ReviewSchema` zod schema in `src/types.ts` so CI consumers get a stable shape.
-- **Severity gate** — `code-review pr <n>` exits 1 when any issue carries `blocker` or `security`. Pass `--no-fail-on-blockers` to opt out.
-
-## Wire it into your repo's pre-merge
-
-See [`docs/integrations/harness.md`](docs/integrations/harness.md) for the GitHub Action snippet and the `.claude/settings.json` `PreToolUse` hook that warns when `git merge` or `gh pr merge` is invoked without a green review.
-
-## Add a new stack
-
-The vendored `prompts-vendored/` is a snapshot of `code-review-prompts`. Contribute new languages or framework overlays there — see [`code-review-prompts/CONTRIBUTING.md`](https://github.com/catalysync/code-review-prompts/blob/main/CONTRIBUTING.md). The harness picks them up automatically on the next release.
+1. **Claude Code subagent:** `.claude/agents/reviewer.md` from `init`. Run it before opening a PR, the way Anthropic reviews in a fresh context first.
+2. **CLI:** from any shell, script or hook.
+3. **GitHub Action:** `.github/workflows/code-review.yml` from `init`. Set `ANTHROPIC_API_KEY` (and `ANTHROPIC_BASE_URL` for other providers) as repo secrets. To block merges, make the check required in branch protection.
 
 ## Tests
 
 ```bash
 pnpm install
-pnpm test
+pnpm test     # vitest, no network: model and GitHub calls are mocked
+pnpm lint     # tsc --noEmit
 pnpm build
 ```
-
-Tests cover compose / detect / parse / render / diff. Anthropic and Octokit calls are not mocked end-to-end here — the contract surfaces are small enough that integration testing is better done by running against a real test PR with `--dry-run`.
 
 ## License
 
