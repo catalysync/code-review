@@ -11,25 +11,36 @@ export function annotateDiff(rawDiff: string): string {
   const lines = rawDiff.split('\n');
   const out: string[] = [];
   let currentFile: string | null = null;
+  let oldPath: string | null = null;
   let rightLine = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.startsWith('diff --git ')) {
-      // diff --git a/path b/path → next +++ line gives the new path
+      // New file section: forget the previous file so its header never
+      // swallows metadata or hunks that belong to this one.
+      currentFile = null;
+      oldPath = null;
       continue;
     }
-    if (line.startsWith('+++ ')) {
-      const path = line.slice(4).replace(/^b\//, '').replace(/^"|"$/g, '');
-      if (path === '/dev/null') continue;
+    if (line.startsWith('--- ') && currentFile === null) {
+      oldPath = stripDiffPath(line.slice(4), 'a/');
+      continue;
+    }
+    if (line.startsWith('+++ ') && currentFile === null) {
+      const path = stripDiffPath(line.slice(4), 'b/');
+      if (path === '/dev/null') {
+        if (!oldPath || oldPath === '/dev/null') continue;
+        currentFile = oldPath;
+        out.push('', `## File: '${oldPath}' (deleted)`, '');
+        continue;
+      }
       currentFile = path;
-      out.push('');
-      out.push(`## File: '${path}'`);
-      out.push('');
+      out.push('', `## File: '${path}'`, '');
       continue;
     }
-    if (line.startsWith('--- ')) continue;
     if (line.startsWith('@@')) {
+      if (currentFile === null) continue;
       const m = /\+(\d+)(?:,(\d+))?/.exec(line);
       if (m) rightLine = Number(m[1]);
       out.push(line);
@@ -53,6 +64,11 @@ export function annotateDiff(rawDiff: string): string {
 
 function pad(n: number): string {
   return String(n || '').padStart(5, ' ');
+}
+
+function stripDiffPath(raw: string, prefix: 'a/' | 'b/'): string {
+  const unquoted = raw.trim().replace(/^"|"$/g, '');
+  return unquoted.startsWith(prefix) ? unquoted.slice(prefix.length) : unquoted;
 }
 
 /** Filter the diff down to a subset of paths (e.g. drop generated files). */

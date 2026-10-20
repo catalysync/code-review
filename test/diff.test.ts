@@ -31,6 +31,62 @@ describe('annotateDiff', () => {
     const out = annotateDiff('--- a/x\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n');
     expect(out).not.toContain('/dev/null');
   });
+
+  it('puts a deleted file under its own header, not the previous file', () => {
+    const diff = [
+      'diff --git a/keep.ts b/keep.ts',
+      '--- a/keep.ts',
+      '+++ b/keep.ts',
+      '@@ -1,1 +1,2 @@',
+      ' export const a = 1;',
+      '+export const b = 2;',
+      'diff --git a/gone.ts b/gone.ts',
+      'deleted file mode 100644',
+      '--- a/gone.ts',
+      '+++ /dev/null',
+      '@@ -1,1 +0,0 @@',
+      '-export const secret = 1;',
+      '',
+    ].join('\n');
+    const out = annotateDiff(diff);
+    const keepIdx = out.indexOf("## File: 'keep.ts'");
+    const goneIdx = out.indexOf("## File: 'gone.ts' (deleted)");
+    const secretIdx = out.indexOf('-export const secret');
+    expect(keepIdx).toBeGreaterThanOrEqual(0);
+    expect(goneIdx).toBeGreaterThan(keepIdx);
+    expect(secretIdx).toBeGreaterThan(goneIdx);
+    expect(out).not.toContain('deleted file mode');
+  });
+
+  it('does not leak binary-file sections under the previous header', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '--- a/a.ts',
+      '+++ b/a.ts',
+      '@@ -1 +1 @@',
+      '-x',
+      '+y',
+      'diff --git a/logo.png b/logo.png',
+      'Binary files a/logo.png and b/logo.png differ',
+    ].join('\n');
+    expect(annotateDiff(diff)).not.toContain('Binary files');
+  });
+
+  it('keeps removed and added lines that look like file headers', () => {
+    const diff = [
+      'diff --git a/q.sql b/q.sql',
+      '--- a/q.sql',
+      '+++ b/q.sql',
+      '@@ -1,2 +1,2 @@',
+      '--- old comment',
+      '+++ new comment',
+      ' select 1;',
+    ].join('\n');
+    const out = annotateDiff(diff);
+    expect(out).toContain('--- old comment');
+    expect(out).toMatch(/1 \+\+\+ new comment/);
+    expect(out).toMatch(/2  select 1;/);
+  });
 });
 
 describe('filterDiff', () => {
