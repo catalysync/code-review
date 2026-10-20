@@ -1,0 +1,13 @@
+diff --git a/app/models/contract.rb b/app/models/contract.rb
+index 1a2b3c4..5d6e7f8 100644
+--- a/app/models/contract.rb
++++ b/app/models/contract.rb
+@@ -6,3 +6,8 @@ class Contract < ApplicationRecord
+     royalty_calculations.paid.sum(:royalty_cents)
+   end
++
++  # What the next payment would pay out.
++  def sum_royalties_not_paid
++    royalty_calculations.unpaid.sum(:royalty_cents)
++  end
+ end

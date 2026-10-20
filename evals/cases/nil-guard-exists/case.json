@@ -1,0 +1,15 @@
+{
+  "title": "Show the edition label after the book title",
+  "description": "Display titles get the edition label in brackets, e.g. \"Vagusnerven (lydbok)\".",
+  "layers": [
+    "ruby/+rails"
+  ],
+  "expect": [],
+  "forbid": [
+    {
+      "id": "missing-nil-guard",
+      "file": "app/services/books/display_title.rb",
+      "match": "\\bnil\\b|NoMethodError|blank title"
+    }
+  ]
+}

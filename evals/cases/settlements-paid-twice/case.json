@@ -1,0 +1,20 @@
+{
+  "title": "Add Contract#sum_royalties_not_paid for the payment preview",
+  "description": "The payment preview shows what the next payment would pay out. This adds the sum on Contract.",
+  "layers": [
+    "ruby/+rails"
+  ],
+  "rules": "Royalties paid twice or counted twice are the worst failure in this app. Settlements imported from the old system are history only and must never be paid again.",
+  "expect": [
+    {
+      "id": "historical-settlements-included",
+      "file": "app/models/contract.rb",
+      "lines": [
+        9,
+        12
+      ],
+      "match": "historical|settlement|payable|twice|again|double"
+    }
+  ],
+  "forbid": []
+}

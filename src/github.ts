@@ -26,6 +26,10 @@ export interface PriorComment {
   body: string;
   path: string;
   line?: number | null;
+  /** Set on a reply: the comment it answers. */
+  inReplyToId?: number;
+  user?: string;
+  createdAt?: string;
 }
 
 /**
@@ -133,7 +137,15 @@ export function createGitHubApi(octokit: Octokit, owner: string, repo: string, n
         pull_number: number,
         per_page: 100,
       });
-      return comments.map((c) => ({ id: c.id, body: c.body ?? '', path: c.path, line: c.line ?? null }));
+      return comments.map((c) => ({
+        id: c.id,
+        body: c.body ?? '',
+        path: c.path,
+        line: c.line ?? null,
+        inReplyToId: c.in_reply_to_id ?? undefined,
+        user: c.user?.login,
+        createdAt: c.created_at,
+      }));
     },
     async getFile(path, ref) {
       try {

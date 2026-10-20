@@ -1,0 +1,8 @@
+<%= form_with model: rights_sale do |f| %>
+  <%= f.collection_select :book_id, books, :id, :title %>
+  <%= f.text_field :buyer %>
+  <%= f.select :rights_type, RightsSale::RIGHTS_TYPES %>
+  <%= f.number_field :amount %>
+  <%= f.date_field :sold_on %>
+  <%= f.submit %>
+<% end %>

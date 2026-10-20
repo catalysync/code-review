@@ -1,0 +1,36 @@
+diff --git a/app/models/rights_sale.rb b/app/models/rights_sale.rb
+index 2b3c4d5..6e7f8a9 100644
+--- a/app/models/rights_sale.rb
++++ b/app/models/rights_sale.rb
+@@ -1,4 +1,7 @@
+ class RightsSale < ApplicationRecord
++  RIGHTS_TYPES = %w[translation audio film].freeze
++
+   belongs_to :book
+   validates :buyer, :amount, :sold_on, presence: true
++  validates :rights_type, inclusion: { in: RIGHTS_TYPES }
+ end
+diff --git a/app/views/rights_sales/_form.html.erb b/app/views/rights_sales/_form.html.erb
+index 3c4d5e6..7f8a9b0 100644
+--- a/app/views/rights_sales/_form.html.erb
++++ b/app/views/rights_sales/_form.html.erb
+@@ -1,7 +1,8 @@
+ <%= form_with model: rights_sale do |f| %>
+   <%= f.collection_select :book_id, books, :id, :title %>
+   <%= f.text_field :buyer %>
++  <%= f.select :rights_type, RightsSale::RIGHTS_TYPES %>
+   <%= f.number_field :amount %>
+   <%= f.date_field :sold_on %>
+   <%= f.submit %>
+ <% end %>
+diff --git a/db/migrate/20260101000000_add_rights_type_to_rights_sales.rb b/db/migrate/20260101000000_add_rights_type_to_rights_sales.rb
+new file mode 100644
+index 0000000..8a9b0c1
+--- /dev/null
++++ b/db/migrate/20260101000000_add_rights_type_to_rights_sales.rb
+@@ -0,0 +1,5 @@
++class AddRightsTypeToRightsSales < ActiveRecord::Migration[8.0]
++  def change
++    add_column :rights_sales, :rights_type, :string
++  end
++end

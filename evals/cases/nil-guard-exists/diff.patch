@@ -1,0 +1,16 @@
+diff --git a/app/services/books/display_title.rb b/app/services/books/display_title.rb
+index 4d5e6f7..8a9b0c1 100644
+--- a/app/services/books/display_title.rb
++++ b/app/services/books/display_title.rb
+@@ -3,7 +3,10 @@ module Books
+     def self.call(book)
+       return '' if book.nil? || book.title.blank?
+ 
+-      book.title.strip
++      title = book.title.strip
++      return title unless book.edition_label.present?
++
++      "#{title} (#{book.edition_label})"
+     end
+   end
+ end

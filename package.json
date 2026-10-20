@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
+    "eval": "tsx src/cli.ts eval",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {

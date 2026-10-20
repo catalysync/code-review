@@ -1,0 +1,17 @@
+diff --git a/app/services/contracts/release.rb b/app/services/contracts/release.rb
+new file mode 100644
+index 0000000..9b0c1d2
+--- /dev/null
++++ b/app/services/contracts/release.rb
+@@ -0,0 +1,11 @@
++module Contracts
++  # Frees a contract whose calculation can't run, so it can be started again.
++  class Release
++    def self.call(contract)
++      return false unless contract.calculating?
++
++      contract.update_column(:calculating, false)
++      true
++    end
++  end
++end

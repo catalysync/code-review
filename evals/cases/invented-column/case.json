@@ -1,0 +1,15 @@
+{
+  "title": "Release a contract stuck on calculating",
+  "description": "A contract whose calculation could not run stayed flagged as calculating forever. This clears the flag so it can be started again.",
+  "layers": [
+    "ruby/+rails"
+  ],
+  "expect": [],
+  "forbid": [
+    {
+      "id": "calculation-state-column",
+      "file": "app/services/contracts/release.rb",
+      "match": "calculation_state|column.*(missing|does ?n.t exist|does not exist)|no such column"
+    }
+  ]
+}

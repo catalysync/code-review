@@ -1,0 +1,19 @@
+{
+  "title": "Record the type of rights sold on a rights sale",
+  "description": "Adds a rights type (translation, audio, film) to rights sales: a column, a validation and a select on the form.",
+  "layers": [
+    "ruby/+rails"
+  ],
+  "expect": [
+    {
+      "id": "rights-type-not-permitted",
+      "file": [
+        "app/controllers/rights_sales_controller.rb",
+        "app/views/rights_sales/_form.html.erb",
+        "app/models/rights_sale.rb"
+      ],
+      "match": "permit|strong param|rights_type"
+    }
+  ],
+  "forbid": []
+}

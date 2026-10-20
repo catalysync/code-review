@@ -12,6 +12,10 @@ import { runReview } from './review.js';
 import { readProjectRules } from './project-rules.js';
 import { renderHeadline } from './render.js';
 import { effectiveTag, evaluateSeverityGate } from './severity.js';
+import { createAnthropicLlm } from './anthropic.js';
+import { loadCases, runEvals, type CaseScore } from './evals.js';
+import { collectFeedback, summarizeFeedback, writeFeedback } from './feedback.js';
+import { createGitHubApi, makeOctokit } from './github.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -199,7 +203,102 @@ program
     }
   });
 
-function printReportSummary(result: Awaited<ReturnType<typeof runReview>>): void {
+const toFraction = (v: string) => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`expected a number from 0 to 1, got ${v}`);
+  return n;
+};
+
+program
+  .command('eval')
+  .description('Score the reviewer against cases with known bugs and known false alarms (evals/cases).')
+  .option('--cases <dir>', 'folder of eval cases', 'evals/cases')
+  .option('--only <name...>', 'run only these cases')
+  .option('--model <id>', `model id (default: $ANTHROPIC_MODEL, else ${FALLBACK_MODEL})`)
+  .option('--base-url <url>', 'Anthropic-compatible API base URL (default: $ANTHROPIC_BASE_URL)')
+  .option('--max-tokens <n>', 'max output tokens for the finder', toInt, DEFAULT_MAX_TOKENS)
+  .option('--verify-votes <n>', 'verifier calls per finding; 0 disables verification', toInt, 1)
+  .option('--verify-model <id>', 'model for the verifier (default: same as --model)')
+  .option('--no-tools', 'ask for YAML text instead of tool calls')
+  .option('--min-recall <x>', 'exit 1 when fewer than this share of known bugs are found (0-1)', toFraction, 0)
+  .option('--max-false-alarms <n>', 'exit 1 when more known false alarms are raised', toInt)
+  .option('--json', 'print the full result as JSON')
+  .action(async (opts) => {
+    try {
+      let cases = loadCases(resolve(opts.cases));
+      if (opts.only?.length) cases = cases.filter((c) => opts.only.includes(c.name));
+      const llm = createAnthropicLlm({ baseURL: opts.baseUrl, model: opts.model ?? defaultModel(), maxTokens: opts.maxTokens });
+      const summary = await runEvals({
+        cases,
+        llm,
+        verifyVotes: opts.verifyVotes,
+        verifyModel: opts.verifyModel,
+        useTools: opts.tools,
+        onCase: opts.json ? undefined : printCaseScore,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(summary, null, 2));
+      } else {
+        console.log();
+        console.log(
+          kleur.bold(
+            `bugs found ${summary.caught}/${summary.expected} (${Math.round(summary.recall * 100)}%) · ` +
+              `known false alarms raised ${summary.falseAlarms} · other Important findings ${summary.unexpected} · ` +
+              `clean PRs clean ${summary.cleanPassed}/${summary.cleanTotal}`,
+          ),
+        );
+      }
+      const failed =
+        summary.recall < opts.minRecall ||
+        (opts.maxFalseAlarms !== undefined && summary.falseAlarms > opts.maxFalseAlarms) ||
+        summary.cases.some((c) => c.error);
+      process.exit(failed ? 1 : 0);
+    } catch (err) {
+      console.error(kleur.red('error: ') + (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+function printCaseScore(score: CaseScore): void {
+  const ok = !score.error && score.missed.length === 0 && score.falseAlarms.length === 0;
+  console.log(`${ok ? kleur.green('✓') : kleur.red('✗')} ${kleur.bold(score.name)} — ${score.title}`);
+  if (score.error) console.log(`    ${kleur.red('error:')} ${score.error}`);
+  if (score.caught.length) console.log(`    found: ${score.caught.join(', ')}`);
+  if (score.missed.length) console.log(`    ${kleur.red('missed:')} ${score.missed.join(', ')}`);
+  if (score.falseAlarms.length) console.log(`    ${kleur.red('false alarms:')} ${score.falseAlarms.join(', ')}`);
+  for (const i of score.unexpected) console.log(`    ${kleur.yellow('other:')} ${i.file}:${i.line_start} ${i.title || i.why}`);
+}
+
+program
+  .command('feedback <number>')
+  .description('Record what happened to the review comments on a PR (fixed, disputed, intentional, ignored).')
+  .requiredOption('--owner <owner>', 'GitHub owner')
+  .requiredOption('--repo <repo>', 'GitHub repo name')
+  .option('-d, --dir <path>', 'repo root', process.cwd())
+  .option('--out <path>', 'feedback log, relative to --dir', '.review/feedback.jsonl')
+  .action(async (numberArg: string, opts) => {
+    try {
+      const number = Number(numberArg);
+      const gh = createGitHubApi(makeOctokit(), opts.owner, opts.repo, number);
+      const records = collectFeedback(await gh.listReviewComments(), { pr: number, repo: `${opts.owner}/${opts.repo}` });
+      const path = resolve(opts.dir, opts.out);
+      const all = writeFeedback(path, records);
+      console.log(kleur.bold(`PR #${number}: ${records.length} review comment(s) recorded in ${path}`));
+      for (const r of records) console.log(`  ${r.outcome.padEnd(12)} ${r.tag} ${r.category}/${r.severity} ${kleur.cyan(r.path)} ${r.title}`);
+      console.log();
+      console.log(kleur.bold(`All recorded comments (${all.length}), noisiest first:`));
+      for (const g of summarizeFeedback(all)) {
+        const parts = Object.entries(g.counts).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
+        console.log(`  ${g.key.padEnd(28)} ${g.total} total: ${parts.join(', ')}`);
+      }
+    } catch (err) {
+      console.error(kleur.red('error: ') + (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+function printReportSummary(
+result: Awaited<ReturnType<typeof runReview>>): void {
   for (const w of result.warnings) console.log(kleur.yellow('warning: ') + w);
   if (result.capped) {
     console.log(kleur.bold(`round cap reached (${result.round - 1} rounds) — step-back note instead of a review`));
