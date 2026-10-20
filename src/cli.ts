@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
@@ -31,9 +31,44 @@ function readVersion(): string {
 const program = new Command();
 program.name('code-review').description('Layered LLM code review.').version(readVersion());
 
+export interface InitResult {
+  written: string[];
+  skipped: string[];
+}
+
+/** Scaffold REVIEW.md, the Claude Code reviewer agent and the GitHub workflow. Never overwrites. */
+export function scaffold(root: string, leaves: string[], templatesDir = join(__dirname, '..', 'templates')): InitResult {
+  const result: InitResult = { written: [], skipped: [] };
+  const write = (dest: string, content: () => string) => {
+    if (existsSync(dest)) {
+      result.skipped.push(dest);
+      return;
+    }
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, content());
+    result.written.push(dest);
+  };
+  const legacy = join(root, '.review', 'project.md');
+  if (existsSync(legacy)) {
+    // Keep using the legacy file; don't add a second, competing rules file.
+    result.skipped.push(legacy);
+  } else {
+    write(join(root, 'REVIEW.md'), () =>
+      readFileSync(join(templatesDir, 'REVIEW.md'), 'utf8').replace('{{LAYERS}}', leaves.join(', ') || 'none'),
+    );
+  }
+  write(join(root, '.claude', 'agents', 'reviewer.md'), () =>
+    readFileSync(join(templatesDir, '.claude', 'agents', 'reviewer.md'), 'utf8'),
+  );
+  write(join(root, '.github', 'workflows', 'code-review.yml'), () =>
+    readFileSync(join(templatesDir, '.github', 'workflows', 'code-review.yml'), 'utf8'),
+  );
+  return result;
+}
+
 program
   .command('init')
-  .description('Detect stack and scaffold .review/ + .claude/agents/reviewer.md.')
+  .description('Detect stack and scaffold REVIEW.md + .claude/agents/reviewer.md + .github/workflows/code-review.yml.')
   .option('-d, --dir <path>', 'repo root', process.cwd())
   .action((opts) => {
     const root = resolve(opts.dir);
@@ -41,41 +76,15 @@ program
     console.log(kleur.bold('Detected layers:'));
     for (const note of detected.notes) console.log(`  ${kleur.dim('•')} ${note}`);
     if (detected.leaves.length === 0) {
-      console.log(kleur.yellow('No stack detected. Pick layers from prompts-vendored/ and pass --layer.'));
-      process.exit(1);
+      console.log(kleur.yellow('No stack detected; reviews will use the universal layer plus per-file language layers.'));
     }
-
-    const reviewDir = join(root, '.review');
-    mkdirSync(reviewDir, { recursive: true });
-    const projectFile = join(reviewDir, 'project.md');
-    if (!existsSync(projectFile)) {
-      const template = readFileSync(join(__dirname, '..', 'templates', '.review', 'project.md'), 'utf8');
-      const filled = template.replace('{{LAYERS}}', JSON.stringify(detected.leaves));
-      writeFileSync(projectFile, filled);
-      console.log(kleur.green(`✓`) + ` wrote ${projectFile}`);
-    } else {
-      console.log(kleur.dim(`• ${projectFile} already exists, leaving alone`));
-    }
-
-    const agentsDir = join(root, '.claude', 'agents');
-    mkdirSync(agentsDir, { recursive: true });
-    const reviewerFile = join(agentsDir, 'reviewer.md');
-    if (!existsSync(reviewerFile)) {
-      cpSync(join(__dirname, '..', 'templates', '.claude', 'agents', 'reviewer.md'), reviewerFile);
-      console.log(kleur.green(`✓`) + ` wrote ${reviewerFile}`);
-    }
-
-    const wfDir = join(root, '.github', 'workflows');
-    mkdirSync(wfDir, { recursive: true });
-    const wfFile = join(wfDir, 'code-review.yml');
-    if (!existsSync(wfFile)) {
-      cpSync(join(__dirname, '..', 'templates', '.github', 'workflows', 'code-review.yml'), wfFile);
-      console.log(kleur.green(`✓`) + ` wrote ${wfFile}`);
-    }
+    const result = scaffold(root, detected.leaves);
+    for (const f of result.written) console.log(kleur.green('✓') + ` wrote ${f}`);
+    for (const f of result.skipped) console.log(kleur.dim(`• ${f} already exists, leaving alone`));
 
     console.log();
     console.log(kleur.bold('Next steps:'));
-    console.log(`  1. Edit ${kleur.cyan('.review/project.md')} with your repo's deliberate choices.`);
+    console.log(`  1. Edit ${kleur.cyan('REVIEW.md')}: what failure looks like here, what not to flag, paths to skip.`);
     console.log(`  2. Set ${kleur.cyan('ANTHROPIC_API_KEY')} (and ${kleur.cyan('GITHUB_TOKEN')} for posting).`);
     console.log(`  3. Run: ${kleur.cyan('code-review pr <number> --owner X --repo Y --dry-run')}`);
   });
